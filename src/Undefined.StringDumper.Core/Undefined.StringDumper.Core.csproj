@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>Undefined.StringDumper.Core</AssemblyName>
+    <RootNamespace>Undefined.StringDumper.Core</RootNamespace>
+  </PropertyGroup>
+</Project>
