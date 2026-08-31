@@ -8,11 +8,13 @@ namespace Undefined.StringDumper.App.Services;
 public sealed class UiPreviewResultSink : IStringResultSink
 {
     public const int DefaultPreviewLimit = 20_000;
+    public const int DeepFilterPreviewLimit = 100_000;
 
     private readonly Dispatcher _dispatcher;
     private readonly ObservableCollection<ExtractedString> _target;
     private readonly int _previewLimit;
     private int _accepted;
+    private long _received;
 
     public UiPreviewResultSink(
         Dispatcher dispatcher,
@@ -24,10 +26,17 @@ public sealed class UiPreviewResultSink : IStringResultSink
         _previewLimit = previewLimit;
     }
 
-    public bool IsTruncated => _accepted >= _previewLimit;
+    public bool IsTruncated => Interlocked.Read(ref _received) > _previewLimit;
+
+    public int AcceptedCount => _accepted;
+
+    public long ReceivedCount => Interlocked.Read(ref _received);
+
+    public int PreviewLimit => _previewLimit;
 
     public async ValueTask WriteAsync(IReadOnlyList<ExtractedString> batch, CancellationToken cancellationToken)
     {
+        Interlocked.Add(ref _received, batch.Count);
         var remaining = _previewLimit - _accepted;
         if (remaining <= 0)
         {

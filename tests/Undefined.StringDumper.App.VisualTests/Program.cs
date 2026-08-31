@@ -169,7 +169,7 @@ internal static class Program
                 .GetResult();
 
             var contents = File.ReadAllText(outputPath);
-            var valid = contents.Contains("Undefined String Dumper 0.3.1", StringComparison.Ordinal) &&
+            var valid = contents.Contains("Undefined String Dumper 0.3.2", StringComparison.Ordinal) &&
                         contents.Contains("Process Hacker 2.39 compatible", StringComparison.Ordinal) &&
                         contents.Contains("Description: Export fixture", StringComparison.Ordinal) &&
                         contents.Contains("Signature: 已验证; Signer: Oracle America, Inc.", StringComparison.Ordinal) &&

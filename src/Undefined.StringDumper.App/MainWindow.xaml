@@ -567,8 +567,10 @@
                         <Grid Grid.Row="0" Margin="18,16,18,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="230" />
-                                <ColumnDefinition Width="10" />
+                                <ColumnDefinition Width="210" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
@@ -584,17 +586,29 @@
                                 </TextBlock>
                             </StackPanel>
                             <TextBox Grid.Column="1"
+                                     IsEnabled="{Binding IsIdle}"
                                      VerticalAlignment="Center"
                                      Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                                     ToolTip="按字符串内容或内存地址筛选" />
+                                     ToolTip="即时筛选当前预览；按 Enter 或点击全量筛选，以 Contains（不区分大小写）搜索完整进程">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding DeepFilterCommand}" />
+                                </TextBox.InputBindings>
+                            </TextBox>
                             <Button Grid.Column="3"
+                                    MinHeight="36"
+                                    VerticalAlignment="Center"
+                                    Command="{Binding DeepFilterCommand}"
+                                    Content="{Binding FilterActionText}"
+                                    Style="{StaticResource BaseButtonStyle}"
+                                    ToolTip="重新流式扫描完整进程，只保留 Contains（不区分大小写）的命中项" />
+                            <Button Grid.Column="5"
                                     MinHeight="36"
                                     VerticalAlignment="Center"
                                     Command="{Binding ExportCommand}"
                                     Content="{Binding ExportActionText}"
                                     Style="{StaticResource BaseButtonStyle}"
                                     ToolTip="重新读取当前目标并把全部结果导出到所选文件" />
-                            <Button Grid.Column="5"
+                            <Button Grid.Column="7"
                                     MinHeight="36"
                                     VerticalAlignment="Center"
                                     Command="{Binding ClearResultsCommand}"

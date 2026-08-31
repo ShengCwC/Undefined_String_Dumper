@@ -19,6 +19,13 @@ if (args.Length == 2 && string.Equals(args[0], "--inspect-java", StringCompariso
     return RunJavaProcessInspection(int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
 }
 
+if (args.Length == 3 && string.Equals(args[0], "--filter-process", StringComparison.Ordinal))
+{
+    return RunFilterProbe(
+        int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture),
+        args[2]);
+}
+
 var tests = new (string Name, Action Run)[]
 {
     ("ASCII strings survive chunk boundaries", TestAsciiChunkBoundary),
@@ -31,6 +38,7 @@ var tests = new (string Name, Action Run)[]
     ("Memory region profile matches Process Hacker settings", TestRegionProfile),
     ("Invalid profiles are rejected", TestInvalidProfile),
     ("Sensitive command-line values are redacted", TestCommandLineRedaction),
+    ("Case-insensitive full-scan filtering reaches late matches", TestContainsFilteringSink),
     ("Current process metadata is readable", TestCurrentProcessMetadata),
     ("Windows scanner reads a live child process", TestLiveProcessScan),
 };
@@ -206,6 +214,34 @@ static void TestCommandLineRedaction()
     True(redacted.Contains("--username player", StringComparison.Ordinal), "non-sensitive argument preserved");
 }
 
+static void TestContainsFilteringSink()
+{
+    var downstream = new CappedSink(1);
+    var sink = new ContainsFilteringResultSink("MeTeOr", downstream);
+    var earlyNoise = Enumerable.Range(0, 20_000)
+        .Select(index => new ExtractedString(
+            (ulong)index,
+            8,
+            $"unrelated-{index}",
+            EncodingKind.Ascii,
+            MemoryRegionKind.Private))
+        .ToArray();
+    var lateMatch = new ExtractedString(
+        0xF00D,
+        28,
+        "meteorDevelopment.METEORClient",
+        EncodingKind.Ascii,
+        MemoryRegionKind.Mapped);
+
+    sink.WriteAsync(earlyNoise, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+    sink.WriteAsync([lateMatch], CancellationToken.None).AsTask().GetAwaiter().GetResult();
+    sink.FlushAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+    Equal(1L, sink.MatchesFound, "full-scan match count");
+    Equal(1, downstream.Results.Count, "downstream result count");
+    Equal(lateMatch, downstream.Results[0], "late case-insensitive match");
+}
+
 static void TestCurrentProcessMetadata()
 {
     var details = ProcessMetadataReader.Read(Environment.ProcessId);
@@ -334,6 +370,25 @@ static int RunJavaProcessInspection(int processId)
     return 0;
 }
 
+static int RunFilterProbe(int processId, string filterText)
+{
+    var downstream = new CountingSink();
+    var filterSink = new ContainsFilteringResultSink(filterText, downstream);
+    var scanner = new WindowsMemoryStringScanner();
+    var summary = scanner.ScanAsync(processId, DefaultOptions(), filterSink)
+        .GetAwaiter()
+        .GetResult();
+    filterSink.FlushAsync().AsTask().GetAwaiter().GetResult();
+
+    Console.WriteLine($"ProcessId={summary.ProcessId}");
+    Console.WriteLine($"StringsScanned={summary.StringsFound}");
+    Console.WriteLine($"Matches={filterSink.MatchesFound}");
+    Console.WriteLine($"BytesRead={summary.BytesRead}");
+    Console.WriteLine($"ReadFailures={summary.ReadFailures}");
+    Console.WriteLine($"ElapsedSeconds={summary.Duration.TotalSeconds:F3}");
+    return 0;
+}
+
 static string NormalizeDirectory(string path) => Path.GetFullPath(path)
     .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
@@ -419,6 +474,23 @@ sealed class CountingSink : IStringResultSink
             }
 
             _previousAddress = result.Address;
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+sealed class CappedSink(int limit) : IStringResultSink
+{
+    public List<ExtractedString> Results { get; } = [];
+
+    public ValueTask WriteAsync(IReadOnlyList<ExtractedString> batch, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var remaining = limit - Results.Count;
+        if (remaining > 0)
+        {
+            Results.AddRange(batch.Take(remaining));
         }
 
         return ValueTask.CompletedTask;

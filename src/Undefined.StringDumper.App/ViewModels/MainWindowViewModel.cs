@@ -21,6 +21,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private bool _isRefreshing;
     private bool _isScanning;
     private bool _isExporting;
+    private bool _isDeepFiltering;
     private bool _consentConfirmed;
     private bool _hasError;
     private string _errorMessage = string.Empty;
@@ -39,6 +40,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private bool _includeMapped = true;
     private bool _includeImage;
     private string? _lastExportPath;
+    private string? _lastDeepFilterText;
+    private long _lastDeepFilterMatches;
+    private bool _lastPreviewWasTruncated;
 
     public MainWindowViewModel()
         : this(new ProcessCatalog(), new WindowsMemoryStringScanner(), Dispatcher.CurrentDispatcher)
@@ -61,6 +65,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         RefreshCommand = new AsyncRelayCommand(RefreshProcessesAsync, () => !IsScanning);
         StartScanCommand = new AsyncRelayCommand(StartScanAsync, CanStartScan);
+        DeepFilterCommand = new AsyncRelayCommand(RunDeepFilterAsync, CanRunDeepFilter);
         ExportCommand = new AsyncRelayCommand(ExportFullAsync, CanStartScan);
         CancelCommand = new RelayCommand(CancelScan, () => IsScanning);
         ClearResultsCommand = new RelayCommand(ClearResults, () => !IsScanning && Results.Count > 0);
@@ -75,6 +80,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public AsyncRelayCommand RefreshCommand { get; }
 
     public AsyncRelayCommand StartScanCommand { get; }
+
+    public AsyncRelayCommand DeepFilterCommand { get; }
 
     public AsyncRelayCommand ExportCommand { get; }
 
@@ -152,6 +159,20 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public string ExportActionText => IsExporting ? "正在导出…" : "完整导出";
+
+    public bool IsDeepFiltering
+    {
+        get => _isDeepFiltering;
+        private set
+        {
+            if (SetProperty(ref _isDeepFiltering, value))
+            {
+                OnPropertyChanged(nameof(FilterActionText));
+            }
+        }
+    }
+
+    public string FilterActionText => IsDeepFiltering ? "全量筛选中…" : "全量筛选";
 
     public bool ConsentConfirmed
     {
@@ -269,6 +290,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _filterText, value))
             {
                 ResultsView.Refresh();
+                OnPropertyChanged(nameof(PreviewMetric));
+                OnPropertyChanged(nameof(PreviewNotice));
+                DeepFilterCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -311,19 +335,36 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _durationMetric, value);
     }
 
-    public string PreviewMetric => Results.Count.ToString("N0", CultureInfo.CurrentCulture);
+    public string PreviewMetric => ResultsView.Cast<object>().Count().ToString("N0", CultureInfo.CurrentCulture);
 
     public string PreviewNotice
     {
         get
         {
+            if (IsDeepFiltering)
+            {
+                return "正在完整进程中执行 Contains（不区分大小写）；仅将命中项保留在内存预览。";
+            }
+
+            if (!string.IsNullOrWhiteSpace(_lastDeepFilterText))
+            {
+                if (!string.Equals(FilterText.Trim(), _lastDeepFilterText, StringComparison.Ordinal))
+                {
+                    return $"当前集合来自上次对“{_lastDeepFilterText}”的全量筛选；按 Enter 或点击全量筛选以搜索当前关键词。";
+                }
+
+                return _lastDeepFilterMatches > UiPreviewResultSink.DeepFilterPreviewLimit
+                    ? $"全量筛选命中 {_lastDeepFilterMatches:N0} 条；界面展示前 {UiPreviewResultSink.DeepFilterPreviewLimit:N0} 条。"
+                    : $"已对完整进程执行 Contains（不区分大小写），共命中 {_lastDeepFilterMatches:N0} 条。";
+            }
+
             if (!string.IsNullOrWhiteSpace(_lastExportPath))
             {
                 return $"完整结果已导出：{_lastExportPath}";
             }
 
-            return Results.Count >= UiPreviewResultSink.DefaultPreviewLimit
-                ? $"界面已达到 {UiPreviewResultSink.DefaultPreviewLimit:N0} 条预览上限；扫描统计仍保持完整。"
+            return _lastPreviewWasTruncated || Results.Count >= UiPreviewResultSink.DefaultPreviewLimit
+                ? $"普通预览仅保留前 {UiPreviewResultSink.DefaultPreviewLimit:N0} 条；输入关键词后按 Enter 或点击全量筛选可搜索完整进程。"
                 : "本次结果仅保存在运行内存中，不会自动写入本地文件。";
         }
     }
@@ -388,9 +429,116 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         return !IsScanning && SelectedProcess is not null && ConsentConfirmed && hasEncoding && hasRegion;
     }
 
+    private bool CanRunDeepFilter() =>
+        CanStartScan() && !string.IsNullOrWhiteSpace(FilterText);
+
     private async Task StartScanAsync()
     {
         await RunScanAsync(exportPath: null);
+    }
+
+    private async Task RunDeepFilterAsync()
+    {
+        if (SelectedProcess is null || string.IsNullOrWhiteSpace(FilterText))
+        {
+            return;
+        }
+
+        var process = SelectedProcess;
+        var filterText = FilterText.Trim();
+        FilterText = filterText;
+        _scanCancellation?.Dispose();
+        _scanCancellation = new CancellationTokenSource();
+        _lastExportPath = null;
+        _lastDeepFilterText = null;
+        _lastDeepFilterMatches = 0;
+        _lastPreviewWasTruncated = false;
+
+        Results.Clear();
+        ResultsView.Refresh();
+        OnPropertyChanged(nameof(PreviewMetric));
+        OnPropertyChanged(nameof(PreviewNotice));
+        HasError = false;
+        ProgressFraction = 0;
+        RegionsMetric = "0 / 0";
+        DataMetric = "0 B";
+        StringsMetric = "0";
+        DurationMetric = "--";
+        StatusTitle = "正在全量筛选";
+        StatusDetail = $"将按 Contains（不区分大小写）在完整进程中搜索“{filterText}”…";
+        IsDeepFiltering = true;
+        IsScanning = true;
+
+        var started = DateTimeOffset.UtcNow;
+        var previewSink = new UiPreviewResultSink(
+            _dispatcher,
+            Results,
+            UiPreviewResultSink.DeepFilterPreviewLimit);
+        var filterSink = new ContainsFilteringResultSink(filterText, previewSink);
+        var progress = new Progress<ScanProgress>(update =>
+        {
+            ProgressFraction = update.Fraction;
+            RegionsMetric = $"{update.RegionsCompleted:N0} / {update.TotalRegions:N0}";
+            DataMetric = FormatBytes(update.BytesRead);
+            StringsMetric = filterSink.MatchesFound.ToString("N0", CultureInfo.CurrentCulture);
+            DurationMetric = FormatDuration(DateTimeOffset.UtcNow - started);
+            StatusTitle = "正在全量筛选";
+            StatusDetail = $"已检查 {update.StringsFound:N0} 条字符串，命中 {filterSink.MatchesFound:N0} 条。";
+            OnPropertyChanged(nameof(PreviewMetric));
+            OnPropertyChanged(nameof(PreviewNotice));
+            ClearResultsCommand.RaiseCanExecuteChanged();
+        });
+
+        try
+        {
+            var options = new ScanOptions
+            {
+                MinimumLength = MinimumLength,
+                DetectAscii = DetectAscii,
+                DetectUnicode = DetectUnicode,
+                IncludePrivate = IncludePrivate,
+                IncludeMapped = IncludeMapped,
+                IncludeImage = IncludeImage,
+            };
+            var summary = await _scanner.ScanAsync(
+                process.ProcessId,
+                options,
+                filterSink,
+                progress,
+                _scanCancellation.Token);
+            await filterSink.FlushAsync(_scanCancellation.Token);
+
+            _lastDeepFilterText = filterText;
+            _lastDeepFilterMatches = filterSink.MatchesFound;
+            _lastPreviewWasTruncated = previewSink.IsTruncated;
+            ProgressFraction = 1;
+            RegionsMetric = $"{summary.RegionsScanned:N0} / {summary.RegionsScanned:N0}";
+            DataMetric = FormatBytes(summary.BytesRead);
+            StringsMetric = filterSink.MatchesFound.ToString("N0", CultureInfo.CurrentCulture);
+            DurationMetric = FormatDuration(summary.Duration);
+            StatusTitle = "全量筛选完成";
+            StatusDetail = previewSink.IsTruncated
+                ? $"已检查全部 {summary.StringsFound:N0} 条字符串，命中 {filterSink.MatchesFound:N0} 条；界面显示前 {previewSink.PreviewLimit:N0} 条。"
+                : $"已检查全部 {summary.StringsFound:N0} 条字符串，命中 {filterSink.MatchesFound:N0} 条。";
+        }
+        catch (OperationCanceledException)
+        {
+            await filterSink.FlushAsync();
+            StatusTitle = "全量筛选已取消";
+            StatusDetail = $"已停止读取；当前仅保留取消前找到的 {filterSink.MatchesFound:N0} 条临时结果。";
+        }
+        catch (Exception exception)
+        {
+            ShowError("无法完成全量筛选", exception.Message);
+        }
+        finally
+        {
+            IsDeepFiltering = false;
+            IsScanning = false;
+            OnPropertyChanged(nameof(PreviewMetric));
+            OnPropertyChanged(nameof(PreviewNotice));
+            ClearResultsCommand.RaiseCanExecuteChanged();
+        }
     }
 
     private async Task ExportFullAsync()
@@ -431,8 +579,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _scanCancellation?.Dispose();
         _scanCancellation = new CancellationTokenSource();
         _lastExportPath = null;
+        _lastDeepFilterText = null;
+        _lastDeepFilterMatches = 0;
+        _lastPreviewWasTruncated = false;
 
         Results.Clear();
+        FilterText = string.Empty;
         ResultsView.Refresh();
         OnPropertyChanged(nameof(PreviewMetric));
         OnPropertyChanged(nameof(PreviewNotice));
@@ -520,8 +672,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             }
             else
             {
+                _lastPreviewWasTruncated = previewSink.IsTruncated;
                 StatusDetail = previewSink.IsTruncated
-                    ? "完整统计已完成；界面仅展示前 20,000 条，等待后续接入远端上传通道。"
+                    ? "完整统计已完成；普通预览仅展示前 20,000 条，可输入关键词后按 Enter 进行全量筛选。"
                     : "全部结果已进入本次会话的内存预览。";
             }
         }
@@ -556,6 +709,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private void ClearResults()
     {
         Results.Clear();
+        _lastDeepFilterText = null;
+        _lastDeepFilterMatches = 0;
+        _lastPreviewWasTruncated = false;
         FilterText = string.Empty;
         StatusTitle = "结果已从内存清除";
         StatusDetail = string.IsNullOrWhiteSpace(_lastExportPath)
@@ -569,13 +725,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private bool FilterResult(object item)
     {
-        if (item is not ExtractedString result || string.IsNullOrWhiteSpace(FilterText))
+        var filterText = FilterText.Trim();
+        if (item is not ExtractedString result || filterText.Length == 0)
         {
             return true;
         }
 
-        return result.Value.Contains(FilterText, StringComparison.OrdinalIgnoreCase) ||
-               result.AddressText.Contains(FilterText, StringComparison.OrdinalIgnoreCase);
+        return result.Value.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+               result.AddressText.Contains(filterText, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ShowError(string title, string message)
@@ -590,6 +747,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         RefreshCommand.RaiseCanExecuteChanged();
         StartScanCommand.RaiseCanExecuteChanged();
+        DeepFilterCommand.RaiseCanExecuteChanged();
         ExportCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
         ClearResultsCommand.RaiseCanExecuteChanged();
