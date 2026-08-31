@@ -14,6 +14,11 @@ if (args.Length == 2 && string.Equals(args[0], "--scan-process", StringCompariso
     return RunProcessProbe(int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
 }
 
+if (args.Length == 2 && string.Equals(args[0], "--inspect-java", StringComparison.Ordinal))
+{
+    return RunJavaProcessInspection(int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
+}
+
 var tests = new (string Name, Action Run)[]
 {
     ("ASCII strings survive chunk boundaries", TestAsciiChunkBoundary),
@@ -25,6 +30,8 @@ var tests = new (string Name, Action Run)[]
     ("Long runs keep one result and cap only display text", TestMaximumLength),
     ("Memory region profile matches Process Hacker settings", TestRegionProfile),
     ("Invalid profiles are rejected", TestInvalidProfile),
+    ("Sensitive command-line values are redacted", TestCommandLineRedaction),
+    ("Current process metadata is readable", TestCurrentProcessMetadata),
     ("Windows scanner reads a live child process", TestLiveProcessScan),
 };
 
@@ -184,6 +191,36 @@ static void TestInvalidProfile()
     throw new InvalidOperationException("Expected invalid scan profile to throw.");
 }
 
+static void TestCommandLineRedaction()
+{
+    const string source = "java.exe --accessToken TOP-SECRET --clientToken=CLIENT-SECRET " +
+        "-Dauth.token=JVM-SECRET --url https://example.test/login?token=URL-SECRET&name=player --username player";
+    var redacted = SensitiveCommandLineRedactor.Redact(source) ??
+        throw new InvalidOperationException("Redactor returned no command line.");
+
+    True(!redacted.Contains("TOP-SECRET", StringComparison.Ordinal), "space-delimited token removed");
+    True(!redacted.Contains("CLIENT-SECRET", StringComparison.Ordinal), "equals-delimited token removed");
+    True(!redacted.Contains("JVM-SECRET", StringComparison.Ordinal), "Java property secret removed");
+    True(!redacted.Contains("URL-SECRET", StringComparison.Ordinal), "URL token removed");
+    True(redacted.Contains("[REDACTED]", StringComparison.Ordinal), "redaction marker present");
+    True(redacted.Contains("--username player", StringComparison.Ordinal), "non-sensitive argument preserved");
+}
+
+static void TestCurrentProcessMetadata()
+{
+    var details = ProcessMetadataReader.Read(Environment.ProcessId);
+    var expectedDirectory = NormalizeDirectory(Environment.CurrentDirectory);
+    var actualDirectory = NormalizeDirectory(details.CurrentDirectory ?? string.Empty);
+
+    Equal(expectedDirectory, actualDirectory, "current directory");
+    True(details.CommandLine?.Contains("Undefined.StringDumper.Core.Tests", StringComparison.OrdinalIgnoreCase) == true,
+        "current command line");
+    True(details.PebAddress?.StartsWith("0x", StringComparison.Ordinal) == true, "PEB address");
+    Equal(Environment.Is64BitProcess ? "64-bit" : "32-bit", details.ImageType, "image type");
+    True(!string.IsNullOrWhiteSpace(details.ParentProcess), "parent process");
+    True(!string.IsNullOrWhiteSpace(details.Protection), "protection level");
+}
+
 static void TestLiveProcessScan()
 {
     var executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test executable path is unavailable.");
@@ -273,6 +310,32 @@ static int RunProcessProbe(int processId)
     Console.WriteLine($"ElapsedSeconds={summary.Duration.TotalSeconds:F3}");
     return 0;
 }
+
+static int RunJavaProcessInspection(int processId)
+{
+    var process = new ProcessCatalog().GetJavaProcessesAsync().GetAwaiter().GetResult()
+        .Single(candidate => candidate.ProcessId == processId);
+
+    Console.WriteLine($"ProcessId={process.ProcessId}");
+    Console.WriteLine($"DescriptionAvailable={!string.IsNullOrWhiteSpace(process.DisplayName)}");
+    Console.WriteLine($"VersionAvailable={process.FileVersionExportValue != "Unavailable"}");
+    Console.WriteLine($"Signature={process.SignatureExportValue}");
+    Console.WriteLine($"SignerAvailable={process.SignerExportValue != "Unavailable"}");
+    Console.WriteLine($"PathAvailable={!string.IsNullOrWhiteSpace(process.ExecutablePath)}");
+    Console.WriteLine($"CommandLineAvailable={process.CommandLineExportValue != "Unavailable"}");
+    Console.WriteLine($"CommandLineRedacted={!process.CommandLineExportValue.Contains("accessToken", StringComparison.OrdinalIgnoreCase) || process.CommandLineExportValue.Contains("[REDACTED]", StringComparison.Ordinal)}");
+    Console.WriteLine($"CurrentDirectoryAvailable={process.CurrentDirectoryExportValue != "Unavailable"}");
+    Console.WriteLine($"StartedAvailable={process.StartedExportLabel != "Unavailable"}");
+    Console.WriteLine($"PebAvailable={process.PebAddressExportValue != "Unavailable"}");
+    Console.WriteLine($"ImageType={process.ImageTypeExportValue}");
+    Console.WriteLine($"ParentAvailable={process.ParentProcessExportValue != "Unavailable"}");
+    Console.WriteLine($"MitigationsAvailable={process.MitigationPoliciesExportValue != "Unavailable"}");
+    Console.WriteLine($"Protection={process.ProtectionExportValue}");
+    return 0;
+}
+
+static string NormalizeDirectory(string path) => Path.GetFullPath(path)
+    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
 static ScanOptions DefaultOptions() => new()
 {

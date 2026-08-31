@@ -8,6 +8,8 @@ namespace Undefined.StringDumper.App.Services;
 
 public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
 {
+    private static readonly string ProductVersion =
+        typeof(TextFileResultSink).Assembly.GetName().Version?.ToString(3) ?? "unknown";
     private readonly string _finalPath;
     private readonly string _partialPath;
     private readonly StreamWriter _writer;
@@ -167,10 +169,23 @@ public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
 
         var architecture = Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit";
         var header = new StringBuilder()
-            .AppendLine("Undefined String Dumper 0.3.0 (Process Hacker 2.39 compatible)")
+            .Append("Undefined String Dumper ")
+            .Append(ProductVersion)
+            .AppendLine(" (Process Hacker 2.39 compatible)")
             .AppendLine($"Windows NT {Environment.OSVersion.Version} ({architecture})")
             .AppendLine(DateTime.Now.ToString("yyyy/M/d H:mm:ss", CultureInfo.InvariantCulture))
             .AppendLine($"Target: {process.ProcessLabel}; PID: {process.ProcessId.ToString(CultureInfo.InvariantCulture)}; Minimum length: {options.MinimumLength.ToString(CultureInfo.InvariantCulture)}; Encodings: {encodings}; Regions: {regionProfile}")
+            .AppendLine($"Description: {process.DescriptionLabel}")
+            .AppendLine($"Signature: {process.SignatureExportValue}; Signer: {process.SignerExportValue}")
+            .AppendLine($"Version: {process.FileVersionExportValue}")
+            .AppendLine($"Image file name: {process.ExecutablePathExportValue}")
+            .AppendLine($"Command line: {process.CommandLineExportValue}")
+            .AppendLine($"Current directory: {process.CurrentDirectoryExportValue}")
+            .AppendLine($"Started: {process.StartedExportLabel}; Uptime at capture: {process.UptimeExportLabel}")
+            .AppendLine($"PEB address: {process.PebAddressExportValue}; Image type: {process.ImageTypeExportValue}")
+            .AppendLine($"Parent: {process.ParentProcessExportValue}")
+            .AppendLine($"Mitigation policies: {process.MitigationPoliciesExportValue}")
+            .AppendLine($"Protection: {process.ProtectionExportValue}")
             .AppendLine()
             .ToString();
 

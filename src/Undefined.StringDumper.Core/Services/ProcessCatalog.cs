@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Undefined.StringDumper.Core.Models;
+using Undefined.StringDumper.Core.Native;
 
 namespace Undefined.StringDumper.Core.Services;
 
@@ -16,6 +17,7 @@ public sealed class ProcessCatalog : IProcessCatalog
         return Task.Run<IReadOnlyList<JavaProcessInfo>>(() =>
         {
             var results = new List<JavaProcessInfo>();
+            _ = NativeMethods.TryEnableDebugPrivilege();
 
             foreach (var process in Process.GetProcesses())
             {
@@ -40,13 +42,16 @@ public sealed class ProcessCatalog : IProcessCatalog
 
                     string? path = null;
                     string? description = null;
+                    string? fileVersion = null;
                     long privateBytes = 0;
                     DateTimeOffset? startTime = null;
 
                     try
                     {
-                        path = process.MainModule?.FileName;
-                        description = process.MainModule?.FileVersionInfo.FileDescription;
+                        var mainModule = process.MainModule;
+                        path = mainModule?.FileName;
+                        description = mainModule?.FileVersionInfo.FileDescription;
+                        fileVersion = mainModule?.FileVersionInfo.FileVersion;
                     }
                     catch
                     {
@@ -71,13 +76,23 @@ public sealed class ProcessCatalog : IProcessCatalog
                         // Leave the optional start time unavailable.
                     }
 
+                    var details = ProcessMetadataReader.Read(process.Id);
+                    var signature = AuthenticodeInspector.Inspect(path);
+                    details = details with
+                    {
+                        FileVersion = fileVersion,
+                        SignatureStatus = signature.Status,
+                        SignerName = signature.SignerName,
+                    };
+
                     results.Add(new JavaProcessInfo(
                         process.Id,
                         processName,
                         string.IsNullOrWhiteSpace(description) ? "Minecraft Java 进程" : description,
                         path,
                         privateBytes,
-                        startTime));
+                        startTime,
+                        details));
                 }
             }
 

@@ -35,6 +35,20 @@
             <Setter Property="Background" Value="#0E1012" />
         </Style>
 
+        <Style x:Key="ProcessMetadataLabelStyle" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+            <Setter Property="FontSize" Value="10" />
+        </Style>
+
+        <Style x:Key="ProcessMetadataValueStyle" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{StaticResource SoftBrush}" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
         <Style x:Key="ProcessListStyle" TargetType="ListBox">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -250,6 +264,7 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
@@ -273,8 +288,27 @@
                                                    Margin="0,5,0,0"
                                                    Foreground="{StaticResource SoftBrush}"
                                                    FontFamily="Consolas"
-                                                   FontSize="11"
-                                                   Text="{Binding MemoryLabel}" />
+                                                   FontSize="10"
+                                                   Text="{Binding CurrentDirectoryLabel}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding CurrentDirectoryLabel}" />
+                                        <Grid Grid.Row="3" Margin="0,5,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Foreground="{StaticResource SoftBrush}"
+                                                       FontFamily="Consolas"
+                                                       FontSize="10"
+                                                       Text="{Binding MemoryLabel}" />
+                                            <TextBlock Grid.Column="1"
+                                                       HorizontalAlignment="Right"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="10"
+                                                       Text="{Binding StartedLabel}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding StartedLabel}" />
+                                        </Grid>
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -344,11 +378,16 @@
 
                 <Border Grid.Row="0" Padding="20" Style="{StaticResource CardStyle}">
                     <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="14" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="230" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
+                        <StackPanel Grid.Row="0" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource SectionLabelStyle}" Text="03  MEMORY ACQUISITION" />
                             <TextBlock Margin="0,9,0,0"
                                        FontSize="22"
@@ -366,7 +405,7 @@
                             </CheckBox>
                         </StackPanel>
 
-                        <Grid Grid.Column="1" Margin="18,0,0,0">
+                        <Grid Grid.Row="0" Grid.Column="1" Margin="18,0,0,0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="8" />
@@ -381,6 +420,100 @@
                                     Content="停止扫描"
                                     Style="{StaticResource DangerButtonStyle}" />
                         </Grid>
+
+                        <Border Grid.Row="2"
+                                Grid.ColumnSpan="2"
+                                Padding="13,11"
+                                Background="#0B0D0F"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Visibility="{Binding HasSelectedProcess, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                    <RowDefinition Height="22" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="92" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="18" />
+                                    <ColumnDefinition Width="92" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Style="{StaticResource ProcessMetadataLabelStyle}" Text="文件说明" />
+                                <TextBlock Grid.Row="0" Grid.Column="1"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.DescriptionLabel}"
+                                           ToolTip="{Binding SelectedProcess.DescriptionLabel}" />
+                                <TextBlock Grid.Row="0" Grid.Column="3" Style="{StaticResource ProcessMetadataLabelStyle}" Text="文件版本" />
+                                <TextBlock Grid.Row="0" Grid.Column="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.FileVersionLabel}"
+                                           ToolTip="{Binding SelectedProcess.FileVersionLabel}" />
+
+                                <TextBlock Grid.Row="1" Style="{StaticResource ProcessMetadataLabelStyle}" Text="数字签名" />
+                                <TextBlock Grid.Row="1" Grid.Column="1"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.SignatureLabel}"
+                                           ToolTip="{Binding SelectedProcess.SignatureLabel}" />
+                                <TextBlock Grid.Row="1" Grid.Column="3" Style="{StaticResource ProcessMetadataLabelStyle}" Text="启动时间" />
+                                <TextBlock Grid.Row="1" Grid.Column="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.StartedLabel}"
+                                           ToolTip="{Binding SelectedProcess.StartedLabel}" />
+
+                                <TextBlock Grid.Row="2" Style="{StaticResource ProcessMetadataLabelStyle}" Text="映像路径" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.PathLabel}"
+                                           ToolTip="{Binding SelectedProcess.PathLabel}" />
+
+                                <TextBlock Grid.Row="3" Style="{StaticResource ProcessMetadataLabelStyle}" Text="命令行" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.CommandLineLabel}"
+                                           ToolTip="{Binding SelectedProcess.CommandLineLabel}" />
+
+                                <TextBlock Grid.Row="4" Style="{StaticResource ProcessMetadataLabelStyle}" Text="当前目录" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.CurrentDirectoryLabel}"
+                                           ToolTip="{Binding SelectedProcess.CurrentDirectoryLabel}" />
+
+                                <TextBlock Grid.Row="5" Style="{StaticResource ProcessMetadataLabelStyle}" Text="PEB 地址" />
+                                <TextBlock Grid.Row="5" Grid.Column="1"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.PebAddressLabel}" />
+                                <TextBlock Grid.Row="5" Grid.Column="3" Style="{StaticResource ProcessMetadataLabelStyle}" Text="映像类型" />
+                                <TextBlock Grid.Row="5" Grid.Column="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.ImageTypeLabel}" />
+
+                                <TextBlock Grid.Row="6" Style="{StaticResource ProcessMetadataLabelStyle}" Text="父进程" />
+                                <TextBlock Grid.Row="6" Grid.Column="1"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.ParentProcessLabel}"
+                                           ToolTip="{Binding SelectedProcess.ParentProcessLabel}" />
+                                <TextBlock Grid.Row="6" Grid.Column="3" Style="{StaticResource ProcessMetadataLabelStyle}" Text="保护级别" />
+                                <TextBlock Grid.Row="6" Grid.Column="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.ProtectionLabel}" />
+
+                                <TextBlock Grid.Row="7" Style="{StaticResource ProcessMetadataLabelStyle}" Text="缓解策略" />
+                                <TextBlock Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="4"
+                                           Style="{StaticResource ProcessMetadataValueStyle}"
+                                           Text="{Binding SelectedProcess.MitigationPoliciesLabel}"
+                                           ToolTip="{Binding SelectedProcess.MitigationPoliciesLabel}" />
+                            </Grid>
+                        </Border>
                     </Grid>
                 </Border>
 

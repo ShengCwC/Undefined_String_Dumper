@@ -119,13 +119,27 @@ internal static class Program
     {
         var outputPath = Path.Combine(Path.GetTempPath(), $"uss-export-test-{Guid.NewGuid():N}.txt");
         var options = new ScanOptions();
+        const string fixtureSecret = "DO-NOT-EXPORT-THIS-TOKEN";
         var process = new JavaProcessInfo(
             4242,
             "javaw",
             "Export fixture",
             @"C:\Games\Java\javaw.exe",
             1024,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow.AddMinutes(-5),
+            new ProcessDetails
+            {
+                FileVersion = "22.0.2.0",
+                SignatureStatus = "已验证",
+                SignerName = "Oracle America, Inc.",
+                CommandLine = $"javaw.exe --accessToken {fixtureSecret} --username player",
+                CurrentDirectory = @"C:\Games\Minecraft",
+                PebAddress = "0x1234abcd",
+                ImageType = "64-bit",
+                ParentProcess = "launcher.exe (31337)",
+                MitigationPolicies = "DEP (permanent); ASLR (high entropy)",
+                Protection = "None",
+            });
         TextFileResultSink? sink = null;
 
         try
@@ -155,8 +169,20 @@ internal static class Program
                 .GetResult();
 
             var contents = File.ReadAllText(outputPath);
-            var valid = contents.Contains("Undefined String Dumper 0.3.0", StringComparison.Ordinal) &&
+            var valid = contents.Contains("Undefined String Dumper 0.3.1", StringComparison.Ordinal) &&
                         contents.Contains("Process Hacker 2.39 compatible", StringComparison.Ordinal) &&
+                        contents.Contains("Description: Export fixture", StringComparison.Ordinal) &&
+                        contents.Contains("Signature: 已验证; Signer: Oracle America, Inc.", StringComparison.Ordinal) &&
+                        contents.Contains("Version: 22.0.2.0", StringComparison.Ordinal) &&
+                        contents.Contains(@"Image file name: C:\Games\Java\javaw.exe", StringComparison.Ordinal) &&
+                        contents.Contains("Command line: javaw.exe --accessToken [REDACTED] --username player", StringComparison.Ordinal) &&
+                        !contents.Contains(fixtureSecret, StringComparison.Ordinal) &&
+                        contents.Contains(@"Current directory: C:\Games\Minecraft", StringComparison.Ordinal) &&
+                        contents.Contains("Started:", StringComparison.Ordinal) &&
+                        contents.Contains("PEB address: 0x1234abcd; Image type: 64-bit", StringComparison.Ordinal) &&
+                        contents.Contains("Parent: launcher.exe (31337)", StringComparison.Ordinal) &&
+                        contents.Contains("Mitigation policies: DEP (permanent); ASLR (high entropy)", StringComparison.Ordinal) &&
+                        contents.Contains("Protection: None", StringComparison.Ordinal) &&
                         contents.Contains("0x1234 (7): abc\tdef", StringComparison.Ordinal) &&
                         contents.Contains("0x5678 (8): 作弊测试", StringComparison.Ordinal) &&
                         contents.Contains("# StringsFound: 2", StringComparison.Ordinal);

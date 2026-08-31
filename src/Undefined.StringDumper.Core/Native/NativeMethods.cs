@@ -43,6 +43,46 @@ internal static class NativeMethods
         nuint size,
         out nuint bytesRead);
 
+    [DllImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
+    internal static extern int NtQueryInformationProcessBasic(
+        SafeProcessHandle process,
+        int processInformationClass,
+        out ProcessBasicInformation processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
+    internal static extern int NtQueryInformationProcessPointer(
+        SafeProcessHandle process,
+        int processInformationClass,
+        out nint processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
+    internal static extern int NtQueryInformationProcessByte(
+        SafeProcessHandle process,
+        int processInformationClass,
+        out byte processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetProcessMitigationPolicy", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetProcessDepPolicy(
+        SafeProcessHandle process,
+        int mitigationPolicy,
+        out ProcessMitigationDepPolicy buffer,
+        nuint length);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetProcessMitigationPolicy", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetProcessMitigationPolicyFlags(
+        SafeProcessHandle process,
+        int mitigationPolicy,
+        out uint buffer,
+        nuint length);
+
     [DllImport("kernel32.dll")]
     internal static extern void GetNativeSystemInfo(out SystemInfo systemInfo);
 
@@ -133,6 +173,24 @@ internal static class NativeMethods
         internal uint AllocationGranularity;
         internal ushort ProcessorLevel;
         internal ushort ProcessorRevision;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ProcessBasicInformation
+    {
+        internal nint Reserved1;
+        internal nint PebBaseAddress;
+        internal nint Reserved2_0;
+        internal nint Reserved2_1;
+        internal nint UniqueProcessId;
+        internal nint InheritedFromUniqueProcessId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ProcessMitigationDepPolicy
+    {
+        internal uint Flags;
+        internal byte Permanent;
     }
 
     [StructLayout(LayoutKind.Sequential)]
