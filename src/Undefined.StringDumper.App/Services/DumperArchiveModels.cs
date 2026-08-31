@@ -35,6 +35,9 @@ public sealed class DumperArchiveEnvelope
     [JsonPropertyName("message")]
     public string Message { get; init; } = string.Empty;
 
+    [JsonPropertyName("expectedArchiveId")]
+    public string ExpectedArchiveId { get; init; } = string.Empty;
+
     [JsonPropertyName("dataKey")]
     public string DataKey { get; init; } = string.Empty;
 

@@ -569,7 +569,7 @@
                                          Grid.Column="0"
                                          IsEnabled="{Binding IsIdle}"
                                          Text="{Binding CloudCredential, UpdateSourceTrigger=PropertyChanged}"
-                                         ToolTip="粘贴 screenshare.cn 后台一次性显示的上传或恢复凭证"
+                                         ToolTip="粘贴上传凭证；恢复时可直接粘贴后台一键复制的完整恢复信息，归档编号会自动填入"
                                          FontFamily="Consolas"
                                          FontSize="10" />
                                 <TextBox Grid.Row="3"

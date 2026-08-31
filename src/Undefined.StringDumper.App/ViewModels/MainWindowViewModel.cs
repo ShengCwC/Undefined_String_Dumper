@@ -178,7 +178,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         get => _cloudCredential;
         set
         {
-            if (SetProperty(ref _cloudCredential, value))
+            var nextCredential = value;
+            if (DumperRecoveryInput.TryParseBundle(value, out var bundledCredential, out var bundledArchiveId))
+            {
+                nextCredential = bundledCredential;
+                CloudArchiveId = bundledArchiveId;
+                CloudStatusDetail = "已识别完整恢复信息，恢复凭证与归档编号已自动配对。";
+            }
+            if (SetProperty(ref _cloudCredential, nextCredential))
             {
                 RaiseCommandStates();
             }
@@ -801,22 +808,16 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private async Task RestoreCloudAsync()
     {
         var credential = CloudCredential.Trim();
-        if (!Guid.TryParse(CloudArchiveId, out var archiveId))
+        if (!IsDumperCredential(credential))
         {
-            ShowError("归档编号无效", "请输入 screenshare.cn 后台显示的完整归档 UUID。");
+            ShowError("恢复凭证无效", "请粘贴后台生成的完整恢复信息，或分别输入恢复凭证与归档 UUID。", "请从 screenshare.cn 后台重新生成恢复凭证后重试。");
             return;
         }
-        var dialog = new SaveFileDialog
+        if (!Guid.TryParse(CloudArchiveId, out var archiveId))
         {
-            AddExtension = true,
-            CheckPathExists = true,
-            DefaultExt = ".txt",
-            FileName = $"USS_Restored_{archiveId:N}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
-            Filter = "UTF-8 文本证据 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-            OverwritePrompt = true,
-            Title = "选择归档恢复文件的保存位置",
-        };
-        if (dialog.ShowDialog() != true) return;
+            ShowError("归档编号无效", "请输入 screenshare.cn 后台显示的完整归档 UUID。", "也可以在后台点击“一键复制恢复信息”并直接粘贴到短期凭证框。");
+            return;
+        }
 
         _scanCancellation?.Dispose();
         _scanCancellation = new CancellationTokenSource();
@@ -826,6 +827,37 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         ProgressFraction = 0;
         try
         {
+            StatusTitle = "正在核对恢复信息";
+            StatusDetail = "先验证恢复凭证绑定的归档编号，再选择保存位置。";
+            CloudStatusDetail = "正在通过 screenshare.cn 安全核对凭证与归档编号…";
+            var resolvedArchiveId = await _archiveClient.ResolveRestoreArchiveIdAsync(
+                credential,
+                archiveId.ToString("D"),
+                _scanCancellation.Token);
+            if (!string.Equals(resolvedArchiveId, archiveId.ToString("D"), StringComparison.OrdinalIgnoreCase))
+            {
+                CloudArchiveId = resolvedArchiveId;
+                archiveId = Guid.Parse(resolvedArchiveId);
+                CloudStatusDetail = "检测到手工输入的归档编号不匹配，已按恢复凭证自动更正。";
+            }
+
+            var dialog = new SaveFileDialog
+            {
+                AddExtension = true,
+                CheckPathExists = true,
+                DefaultExt = ".txt",
+                FileName = $"USS_Restored_{archiveId:N}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                Filter = "UTF-8 文本证据 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+                OverwritePrompt = true,
+                Title = "选择归档恢复文件的保存位置",
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                StatusTitle = "尚未开始恢复";
+                StatusDetail = "已完成凭证核对，但没有选择输出文件。";
+                return;
+            }
+
             var restoreProgress = new Progress<DumperArchiveTransferProgress>(update =>
             {
                 ProgressFraction = update.Fraction;
@@ -853,7 +885,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception)
         {
-            ShowError("无法恢复云端归档", exception.Message);
+            ShowError("无法恢复云端归档", exception.Message, "恢复失败不会覆盖原有目标文件；请重新复制完整恢复信息并检查网络后重试。");
             CloudStatusDetail = "恢复失败时不会覆盖原有目标文件；请核对归档编号、恢复凭证和网络后重试。";
         }
         finally
@@ -1051,12 +1083,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                result.AddressText.Contains(filterText, StringComparison.OrdinalIgnoreCase);
     }
 
-    private void ShowError(string title, string message)
+    private void ShowError(string title, string message, string? retryHint = null)
     {
         HasError = true;
         ErrorMessage = message;
         StatusTitle = title;
-        StatusDetail = "请核对目标进程、管理员权限与扫描选项后重试。";
+        StatusDetail = retryHint ?? "请核对目标进程、管理员权限与扫描选项后重试。";
     }
 
     private void RaiseCommandStates()

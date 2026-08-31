@@ -1,4 +1,7 @@
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -7,6 +10,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Undefined.StringDumper.App;
 using Undefined.StringDumper.App.Services;
+using Undefined.StringDumper.App.ViewModels;
 using Undefined.StringDumper.Core.Models;
 using Undefined.StringDumper.Core.Services;
 
@@ -40,6 +44,11 @@ internal static class Program
         }
 
         if (!VerifyEncryptedSpoolContainsNoPlaintext())
+        {
+            return 1;
+        }
+
+        if (!VerifyRecoveryBundleAndArchiveCorrection())
         {
             return 1;
         }
@@ -181,7 +190,8 @@ internal static class Program
                 .GetResult();
 
             var contents = File.ReadAllText(outputPath);
-            var valid = contents.Contains("Undefined String Dumper 0.4.0", StringComparison.Ordinal) &&
+            var productVersion = typeof(EvidenceTextFormatter).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+            var valid = contents.Contains($"Undefined String Dumper {productVersion}", StringComparison.Ordinal) &&
                         contents.Contains("Process Hacker 2.39 compatible", StringComparison.Ordinal) &&
                         contents.Contains("Description: Export fixture", StringComparison.Ordinal) &&
                         contents.Contains("Signature: 已验证; Signer: Oracle America, Inc.", StringComparison.Ordinal) &&
@@ -389,6 +399,69 @@ internal static class Program
             if (sink is not null) sink.DisposeAsync().AsTask().GetAwaiter().GetResult();
             ArchiveSpoolStore.DeleteAsync(archiveId).GetAwaiter().GetResult();
             CryptographicOperations.ZeroMemory(dataKey);
+        }
+    }
+
+    private static bool VerifyRecoveryBundleAndArchiveCorrection()
+    {
+        var requestedArchiveId = Guid.NewGuid().ToString("D");
+        var expectedArchiveId = Guid.NewGuid().ToString("D");
+        var credential = $"usd_{new string('A', 43)}";
+        var bundle = $"usd-restore-v1:{expectedArchiveId}:{credential}";
+        if (!DumperRecoveryInput.TryParseBundle(bundle, out var parsedCredential, out var parsedArchiveId) ||
+            !string.Equals(parsedCredential, credential, StringComparison.Ordinal) ||
+            !string.Equals(parsedArchiveId, expectedArchiveId, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("Recovery bundle did not keep the credential and archive ID paired.");
+            return false;
+        }
+
+        using (var viewModel = new MainWindowViewModel())
+        {
+            viewModel.CloudCredential = bundle;
+            if (!string.Equals(viewModel.CloudCredential, credential, StringComparison.Ordinal) ||
+                !string.Equals(viewModel.CloudArchiveId, expectedArchiveId, StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Pasting recovery information did not populate both Dumper fields.");
+                return false;
+            }
+        }
+
+        using var httpClient = new HttpClient(new ArchiveMismatchHandler(expectedArchiveId))
+        {
+            BaseAddress = new Uri("https://screenshare.cn/"),
+        };
+        using var client = new DumperArchiveClient(httpClient);
+        var resolvedArchiveId = client.ResolveRestoreArchiveIdAsync(credential, requestedArchiveId)
+            .GetAwaiter()
+            .GetResult();
+        if (!string.Equals(resolvedArchiveId, expectedArchiveId, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("A valid restore credential did not correct a mismatched archive ID.");
+            return false;
+        }
+
+        Console.WriteLine("PASS  Recovery bundle pairing and archive ID correction");
+        return true;
+    }
+
+    private sealed class ArchiveMismatchHandler(string expectedArchiveId) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(new
+                {
+                    ok = false,
+                    code = "DUMPER_TOKEN_ARCHIVE_MISMATCH",
+                    message = "输入的归档编号与该恢复凭证不匹配。",
+                    expectedArchiveId,
+                }),
+            });
         }
     }
 }

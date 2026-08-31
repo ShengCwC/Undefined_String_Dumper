@@ -180,6 +180,26 @@ public sealed class DumperArchiveClient : IDisposable
         return manifest;
     }
 
+    public async Task<string> ResolveRestoreArchiveIdAsync(
+        string credential,
+        string archiveId,
+        CancellationToken cancellationToken = default)
+    {
+        var requestedArchiveId = NormalizeArchiveId(archiveId);
+        try
+        {
+            var manifest = await DownloadManifestAsync(credential, requestedArchiveId, cancellationToken)
+                .ConfigureAwait(false);
+            return NormalizeArchiveId(manifest.ArchiveId);
+        }
+        catch (DumperArchiveException exception) when (
+            string.Equals(exception.Code, "DUMPER_TOKEN_ARCHIVE_MISMATCH", StringComparison.Ordinal) &&
+            Guid.TryParse(exception.ExpectedArchiveId, out var expectedArchiveId))
+        {
+            return expectedArchiveId.ToString("D");
+        }
+    }
+
     public async Task<byte[]> GetRestoreKeyAsync(
         string credential,
         string archiveId,
@@ -288,7 +308,8 @@ public sealed class DumperArchiveClient : IDisposable
             throw new DumperArchiveException(
                 string.IsNullOrWhiteSpace(envelope.Code) ? "DUMPER_HTTP_ERROR" : envelope.Code,
                 string.IsNullOrWhiteSpace(envelope.Message) ? $"归档服务返回 HTTP {(int)response.StatusCode}。" : envelope.Message,
-                response.StatusCode);
+                response.StatusCode,
+                envelope.ExpectedArchiveId);
         }
         return envelope;
     }
@@ -303,7 +324,8 @@ public sealed class DumperArchiveClient : IDisposable
             throw new DumperArchiveException(
                 string.IsNullOrWhiteSpace(envelope?.Code) ? "DUMPER_HTTP_ERROR" : envelope.Code,
                 string.IsNullOrWhiteSpace(envelope?.Message) ? $"归档服务返回 HTTP {(int)response.StatusCode}。" : envelope.Message,
-                response.StatusCode);
+                response.StatusCode,
+                envelope?.ExpectedArchiveId ?? string.Empty);
         }
         catch (JsonException)
         {
@@ -366,9 +388,12 @@ public sealed class DumperArchiveClient : IDisposable
 public sealed class DumperArchiveException(
     string code,
     string message,
-    HttpStatusCode statusCode) : Exception(message)
+    HttpStatusCode statusCode,
+    string expectedArchiveId = "") : Exception(message)
 {
     public string Code { get; } = code;
 
     public HttpStatusCode StatusCode { get; } = statusCode;
+
+    public string ExpectedArchiveId { get; } = expectedArchiveId;
 }

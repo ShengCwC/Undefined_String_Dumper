@@ -9,7 +9,7 @@
     <AssemblyName>UndefinedStringDumper</AssemblyName>
     <RootNamespace>Undefined.StringDumper.App</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\logo.png" />
