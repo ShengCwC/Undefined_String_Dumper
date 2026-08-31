@@ -195,7 +195,7 @@
                                VerticalAlignment="Center"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"
-                               Text="上传通道未配置 · 本地零持久化" />
+                               Text="加密归档已接入 screenshare.cn · 普通预览仍仅限会话" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -382,6 +382,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="14" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="12" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -512,6 +514,93 @@
                                            Style="{StaticResource ProcessMetadataValueStyle}"
                                            Text="{Binding SelectedProcess.MitigationPoliciesLabel}"
                                            ToolTip="{Binding SelectedProcess.MitigationPoliciesLabel}" />
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="4"
+                                Grid.ColumnSpan="2"
+                                Padding="13,11"
+                                Background="#0B0D0F"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="6" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="6" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="330" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Row="0" Grid.ColumnSpan="7" Orientation="Horizontal">
+                                    <TextBlock Foreground="{StaticResource GoldBrush}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Text="ENCRYPTED CLOUD ARCHIVE" />
+                                    <TextBlock Margin="10,0,0,0"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               FontSize="10"
+                                               Text="凭证由 screenshare.cn 后台签发；KOOK 仅保存加密分片" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Row="1"
+                                           Grid.Column="0"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="9"
+                                           Text="短期凭证" />
+                                <TextBlock Grid.Row="1"
+                                           Grid.Column="2"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="9"
+                                           Text="归档编号（新上传可留空）" />
+
+                                <TextBox Grid.Row="3"
+                                         Grid.Column="0"
+                                         IsEnabled="{Binding IsIdle}"
+                                         Text="{Binding CloudCredential, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="粘贴 screenshare.cn 后台一次性显示的上传或恢复凭证"
+                                         FontFamily="Consolas"
+                                         FontSize="10" />
+                                <TextBox Grid.Row="3"
+                                         Grid.Column="2"
+                                         IsEnabled="{Binding IsIdle}"
+                                         Text="{Binding CloudArchiveId, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="新上传可留空自动生成；断点续传或恢复时输入完整归档 UUID"
+                                         FontFamily="Consolas"
+                                         FontSize="10" />
+                                <Button Grid.Row="3"
+                                        Grid.Column="4"
+                                        MinHeight="36"
+                                        Command="{Binding CloudUploadCommand}"
+                                        Content="{Binding CloudUploadActionText}"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        ToolTip="扫描结果只以压缩后的 AES-256-GCM 加密分片写入临时目录并上传；网络失败可按归档编号续传" />
+                                <Button Grid.Row="3"
+                                        Grid.Column="6"
+                                        MinHeight="36"
+                                        Command="{Binding CloudRestoreCommand}"
+                                        Content="{Binding CloudRestoreActionText}"
+                                        Style="{StaticResource BaseButtonStyle}"
+                                        ToolTip="使用后台签发的恢复凭证下载、校验、解密并重新组合完整文本证据" />
+
+                                <TextBlock Grid.Row="5"
+                                           Grid.ColumnSpan="7"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="10"
+                                           Text="{Binding CloudStatusDetail}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding CloudStatusDetail}" />
                             </Grid>
                         </Border>
                     </Grid>

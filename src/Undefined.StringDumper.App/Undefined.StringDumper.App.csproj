@@ -9,11 +9,15 @@
     <AssemblyName>UndefinedStringDumper</AssemblyName>
     <RootNamespace>Undefined.StringDumper.App</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Version>0.4.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\logo.png" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Undefined.StringDumper.Core\Undefined.StringDumper.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 </Project>

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows.Data;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -16,6 +17,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IProcessCatalog _processCatalog;
     private readonly IMemoryStringScanner _scanner;
     private readonly Dispatcher _dispatcher;
+    private readonly DumperArchiveClient _archiveClient;
     private CancellationTokenSource? _scanCancellation;
     private JavaProcessInfo? _selectedProcess;
     private bool _isRefreshing;
@@ -43,6 +45,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private string? _lastDeepFilterText;
     private long _lastDeepFilterMatches;
     private bool _lastPreviewWasTruncated;
+    private string _cloudCredential = string.Empty;
+    private string _cloudArchiveId = string.Empty;
+    private string _cloudStatusDetail = "在 screenshare.cn 后台生成短期凭证后，可加密上传或恢复归档。";
+    private bool _isCloudOperation;
 
     public MainWindowViewModel()
         : this(new ProcessCatalog(), new WindowsMemoryStringScanner(), Dispatcher.CurrentDispatcher)
@@ -57,6 +63,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _processCatalog = processCatalog;
         _scanner = scanner;
         _dispatcher = dispatcher;
+        _archiveClient = new DumperArchiveClient();
 
         Processes = [];
         Results = [];
@@ -67,6 +74,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         StartScanCommand = new AsyncRelayCommand(StartScanAsync, CanStartScan);
         DeepFilterCommand = new AsyncRelayCommand(RunDeepFilterAsync, CanRunDeepFilter);
         ExportCommand = new AsyncRelayCommand(ExportFullAsync, CanStartScan);
+        CloudUploadCommand = new AsyncRelayCommand(UploadCloudAsync, CanUseCloud);
+        CloudRestoreCommand = new AsyncRelayCommand(RestoreCloudAsync, CanRestoreCloud);
         CancelCommand = new RelayCommand(CancelScan, () => IsScanning);
         ClearResultsCommand = new RelayCommand(ClearResults, () => !IsScanning && Results.Count > 0);
     }
@@ -84,6 +93,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public AsyncRelayCommand DeepFilterCommand { get; }
 
     public AsyncRelayCommand ExportCommand { get; }
+
+    public AsyncRelayCommand CloudUploadCommand { get; }
+
+    public AsyncRelayCommand CloudRestoreCommand { get; }
 
     public RelayCommand CancelCommand { get; }
 
@@ -159,6 +172,54 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public string ExportActionText => IsExporting ? "正在导出…" : "完整导出";
+
+    public string CloudCredential
+    {
+        get => _cloudCredential;
+        set
+        {
+            if (SetProperty(ref _cloudCredential, value))
+            {
+                RaiseCommandStates();
+            }
+        }
+    }
+
+    public string CloudArchiveId
+    {
+        get => _cloudArchiveId;
+        set
+        {
+            if (SetProperty(ref _cloudArchiveId, value))
+            {
+                RaiseCommandStates();
+            }
+        }
+    }
+
+    public string CloudStatusDetail
+    {
+        get => _cloudStatusDetail;
+        private set => SetProperty(ref _cloudStatusDetail, value);
+    }
+
+    public bool IsCloudOperation
+    {
+        get => _isCloudOperation;
+        private set
+        {
+            if (SetProperty(ref _isCloudOperation, value))
+            {
+                OnPropertyChanged(nameof(CloudUploadActionText));
+                OnPropertyChanged(nameof(CloudRestoreActionText));
+                RaiseCommandStates();
+            }
+        }
+    }
+
+    public string CloudUploadActionText => IsCloudOperation ? "处理中…" : "扫描并加密上传";
+
+    public string CloudRestoreActionText => IsCloudOperation ? "处理中…" : "恢复归档";
 
     public bool IsDeepFiltering
     {
@@ -376,6 +437,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _scanCancellation?.Cancel();
         _scanCancellation?.Dispose();
         _scanCancellation = null;
+        _archiveClient.Dispose();
         Results.Clear();
     }
 
@@ -431,6 +493,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private bool CanRunDeepFilter() =>
         CanStartScan() && !string.IsNullOrWhiteSpace(FilterText);
+
+    private bool CanUseCloud() =>
+        !IsScanning && !IsCloudOperation && IsDumperCredential(CloudCredential);
+
+    private bool CanRestoreCloud() =>
+        CanUseCloud() && Guid.TryParse(CloudArchiveId, out _);
 
     private async Task StartScanAsync()
     {
@@ -566,6 +634,254 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         await RunScanAsync(dialog.FileName);
     }
+
+    private async Task UploadCloudAsync()
+    {
+        var credential = CloudCredential.Trim();
+        if (!IsDumperCredential(credential))
+        {
+            ShowError("上传凭证无效", "请从 screenshare.cn 后台复制完整的 Dumper 上传凭证。");
+            return;
+        }
+
+        var archiveId = Guid.TryParse(CloudArchiveId, out var parsedArchiveId)
+            ? parsedArchiveId.ToString("D")
+            : Guid.NewGuid().ToString("D");
+        CloudArchiveId = archiveId;
+        _scanCancellation?.Dispose();
+        _scanCancellation = new CancellationTokenSource();
+        IsCloudOperation = true;
+        IsScanning = true;
+        HasError = false;
+        ProgressFraction = 0;
+        CloudStatusDetail = $"正在读取归档 {archiveId} 的本地断点…";
+        byte[]? dataKey = null;
+        EncryptedArchiveSink? archiveSink = null;
+
+        try
+        {
+            var checkpoint = await ArchiveSpoolStore.LoadCheckpointAsync(archiveId, _scanCancellation.Token);
+            if (checkpoint is { ScanCompleted: false })
+            {
+                await ArchiveSpoolStore.DeleteAsync(archiveId);
+                checkpoint = null;
+                CloudStatusDetail = "检测到未完成的扫描临时分片，将重新扫描；没有明文临时文件被保留。";
+            }
+
+            DumperArchiveRemoteState remote;
+            if (checkpoint is not null)
+            {
+                (remote, dataKey) = await _archiveClient.CreateOrResumeAsync(
+                    credential,
+                    archiveId,
+                    checkpoint.ProcessName,
+                    checkpoint.ProcessId,
+                    checkpoint.DumperVersion,
+                    checkpoint.PartSizeBytes,
+                    _scanCancellation.Token);
+            }
+            else
+            {
+                if (!CanStartNewCloudScan())
+                {
+                    throw new InvalidOperationException("新归档需要先选择 Java 进程、确认授权并启用至少一种编码和内存区域。");
+                }
+                var process = SelectedProcess!;
+                (remote, dataKey) = await _archiveClient.CreateOrResumeAsync(
+                    credential,
+                    archiveId,
+                    process,
+                    EncryptedArchiveSink.DefaultPartSizeBytes,
+                    _scanCancellation.Token);
+            }
+
+            if (string.Equals(remote.Status, "sealed", StringComparison.OrdinalIgnoreCase))
+            {
+                if (checkpoint is not null) await ArchiveSpoolStore.DeleteAsync(archiveId);
+                ProgressFraction = 1;
+                StatusTitle = "云端归档已封存";
+                StatusDetail = $"归档 {archiveId} 已存在且完整，无需重复上传。";
+                CloudStatusDetail = StatusDetail;
+                return;
+            }
+
+            if (checkpoint is null)
+            {
+                Results.Clear();
+                FilterText = string.Empty;
+                ResultsView.Refresh();
+                _lastExportPath = null;
+                _lastDeepFilterText = null;
+                _lastDeepFilterMatches = 0;
+                _lastPreviewWasTruncated = false;
+                RegionsMetric = "0 / 0";
+                DataMetric = "0 B";
+                StringsMetric = "0";
+                DurationMetric = "--";
+                var options = CurrentScanOptions();
+                var process = SelectedProcess!;
+                var previewSink = new UiPreviewResultSink(_dispatcher, Results);
+                archiveSink = await EncryptedArchiveSink.CreateAsync(
+                    archiveId,
+                    dataKey,
+                    process,
+                    options,
+                    cancellationToken: _scanCancellation.Token);
+                var scanStarted = DateTimeOffset.UtcNow;
+                var scanProgress = new Progress<ScanProgress>(update =>
+                {
+                    ProgressFraction = update.Fraction * 0.65;
+                    RegionsMetric = $"{update.RegionsCompleted:N0} / {update.TotalRegions:N0}";
+                    DataMetric = FormatBytes(update.BytesRead);
+                    StringsMetric = update.StringsFound.ToString("N0", CultureInfo.CurrentCulture);
+                    DurationMetric = FormatDuration(DateTimeOffset.UtcNow - scanStarted);
+                    StatusTitle = "正在生成加密归档";
+                    StatusDetail = "结果正被分片压缩并加密；本地磁盘不会出现明文扫描文件。";
+                    CloudStatusDetail = $"扫描阶段 · 已读取 {FormatBytes(update.BytesRead)}，发现 {update.StringsFound:N0} 条字符串。";
+                    OnPropertyChanged(nameof(PreviewMetric));
+                    OnPropertyChanged(nameof(PreviewNotice));
+                });
+                var summary = await _scanner.ScanAsync(
+                    process.ProcessId,
+                    options,
+                    new CompositeResultSink(previewSink, archiveSink),
+                    scanProgress,
+                    _scanCancellation.Token);
+                checkpoint = await archiveSink.CompleteAsync(summary, _scanCancellation.Token);
+                _lastPreviewWasTruncated = previewSink.IsTruncated;
+                await archiveSink.DisposeAsync();
+                archiveSink = null;
+                StatusTitle = "扫描完成，正在上传密文";
+                StatusDetail = $"已生成 {checkpoint.Parts.Count:N0} 个独立加密分片，开始断点续传。";
+            }
+
+            CryptographicOperations.ZeroMemory(dataKey);
+            dataKey = null;
+            var transferProgress = new Progress<DumperArchiveTransferProgress>(update =>
+            {
+                ProgressFraction = 0.65 + update.Fraction * 0.35;
+                CloudStatusDetail = $"{update.Detail}  {update.CompletedParts:N0} / {update.TotalParts:N0} · {FormatBytes(update.BytesTransferred)} / {FormatBytes(update.TotalBytes)}";
+                StatusTitle = update.Phase == "sealed" ? "云端归档已封存" : "正在上传加密分片";
+                StatusDetail = update.Detail;
+            });
+            await _archiveClient.UploadCheckpointAsync(
+                credential,
+                checkpoint,
+                transferProgress,
+                _scanCancellation.Token);
+            await ArchiveSpoolStore.DeleteAsync(archiveId);
+            ProgressFraction = 1;
+            StatusTitle = "云端归档完成";
+            StatusDetail = $"归档 {archiveId} 已封存；服务端和客户端完整性校验均已通过。";
+            CloudStatusDetail = "上传完成。本地加密临时分片已清理，可在 screenshare.cn 后台查看记录或签发恢复凭证。";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTitle = "云端归档已暂停";
+            StatusDetail = "操作已停止；完成扫描后的加密分片会保留，可使用同一归档编号继续上传。";
+            CloudStatusDetail = $"归档编号：{archiveId}。重新粘贴有效上传凭证后可断点续传。";
+        }
+        catch (Exception exception)
+        {
+            ShowError("无法完成云端归档", exception.Message);
+            CloudStatusDetail = $"归档编号：{archiveId}。若扫描已经完成，本地只保留加密分片，可稍后重试。";
+        }
+        finally
+        {
+            if (archiveSink is not null) await archiveSink.DisposeAsync();
+            if (dataKey is not null) CryptographicOperations.ZeroMemory(dataKey);
+            IsCloudOperation = false;
+            IsScanning = false;
+            OnPropertyChanged(nameof(PreviewMetric));
+            OnPropertyChanged(nameof(PreviewNotice));
+            ClearResultsCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task RestoreCloudAsync()
+    {
+        var credential = CloudCredential.Trim();
+        if (!Guid.TryParse(CloudArchiveId, out var archiveId))
+        {
+            ShowError("归档编号无效", "请输入 screenshare.cn 后台显示的完整归档 UUID。");
+            return;
+        }
+        var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".txt",
+            FileName = $"USS_Restored_{archiveId:N}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+            Filter = "UTF-8 文本证据 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+            OverwritePrompt = true,
+            Title = "选择归档恢复文件的保存位置",
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        _scanCancellation?.Dispose();
+        _scanCancellation = new CancellationTokenSource();
+        IsCloudOperation = true;
+        IsScanning = true;
+        HasError = false;
+        ProgressFraction = 0;
+        try
+        {
+            var restoreProgress = new Progress<DumperArchiveTransferProgress>(update =>
+            {
+                ProgressFraction = update.Fraction;
+                StatusTitle = update.Phase == "restored" ? "归档恢复完成" : "正在恢复加密归档";
+                StatusDetail = update.Detail;
+                CloudStatusDetail = $"{update.Detail}  {update.CompletedParts:N0} / {update.TotalParts:N0} · {FormatBytes(update.BytesTransferred)} / {FormatBytes(update.TotalBytes)}";
+            });
+            var restoreService = new DumperArchiveRestoreService(_archiveClient);
+            await restoreService.RestoreAsync(
+                credential,
+                archiveId.ToString("D"),
+                dialog.FileName,
+                restoreProgress,
+                _scanCancellation.Token);
+            ProgressFraction = 1;
+            StatusTitle = "归档恢复完成";
+            StatusDetail = $"已验证每个分片和完整文件，并保存到 {dialog.FileName}";
+            CloudStatusDetail = "恢复完成：分片顺序、密文 SHA-256、密文链和最终明文 SHA-256 均一致。";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTitle = "归档恢复已取消";
+            StatusDetail = "未完成的临时文件已清理，原有目标文件未被覆盖。";
+            CloudStatusDetail = StatusDetail;
+        }
+        catch (Exception exception)
+        {
+            ShowError("无法恢复云端归档", exception.Message);
+            CloudStatusDetail = "恢复失败时不会覆盖原有目标文件；请核对归档编号、恢复凭证和网络后重试。";
+        }
+        finally
+        {
+            IsCloudOperation = false;
+            IsScanning = false;
+        }
+    }
+
+    private bool CanStartNewCloudScan()
+    {
+        var hasEncoding = DetectAscii || DetectUnicode;
+        var hasRegion = IncludePrivate || IncludeMapped || IncludeImage;
+        return SelectedProcess is not null && ConsentConfirmed && hasEncoding && hasRegion;
+    }
+
+    private ScanOptions CurrentScanOptions() => new()
+    {
+        MinimumLength = MinimumLength,
+        DetectAscii = DetectAscii,
+        DetectUnicode = DetectUnicode,
+        IncludePrivate = IncludePrivate,
+        IncludeMapped = IncludeMapped,
+        IncludeImage = IncludeImage,
+    };
+
+    private static bool IsDumperCredential(string value) =>
+        value.Trim().Length == 47 && value.Trim().StartsWith("usd_", StringComparison.Ordinal);
 
     private async Task RunScanAsync(string? exportPath)
     {
@@ -749,6 +1065,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         StartScanCommand.RaiseCanExecuteChanged();
         DeepFilterCommand.RaiseCanExecuteChanged();
         ExportCommand.RaiseCanExecuteChanged();
+        CloudUploadCommand.RaiseCanExecuteChanged();
+        CloudRestoreCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
         ClearResultsCommand.RaiseCanExecuteChanged();
     }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO;
 using System.Text;
 using Undefined.StringDumper.Core.Models;
@@ -8,8 +7,6 @@ namespace Undefined.StringDumper.App.Services;
 
 public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
 {
-    private static readonly string ProductVersion =
-        typeof(TextFileResultSink).Assembly.GetName().Version?.ToString(3) ?? "unknown";
     private readonly string _finalPath;
     private readonly string _partialPath;
     private readonly StreamWriter _writer;
@@ -73,19 +70,8 @@ public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
             throw new InvalidOperationException("The export has already been completed.");
         }
 
-        var buffer = new StringBuilder(Math.Max(1024, batch.Count * 64));
-        foreach (var result in batch)
-        {
-            buffer.Append("0x")
-                .Append(result.Address.ToString("x", CultureInfo.InvariantCulture))
-                .Append(" (")
-                .Append(result.Length.ToString(CultureInfo.InvariantCulture))
-                .Append("): ")
-                .Append(result.Value)
-                .AppendLine();
-        }
-
-        await _writer.WriteAsync(buffer.ToString().AsMemory(), cancellationToken).ConfigureAwait(false);
+        await _writer.WriteAsync(EvidenceTextFormatter.FormatBatch(batch).AsMemory(), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task CompleteAsync(ScanSummary summary, CancellationToken cancellationToken = default)
@@ -97,15 +83,7 @@ public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
             return;
         }
 
-        await _writer.WriteLineAsync().ConfigureAwait(false);
-        await _writer.WriteLineAsync($"# CompletedUtc: {summary.CompletedAt:O}").ConfigureAwait(false);
-        await _writer.WriteLineAsync($"# RegionsScanned: {summary.RegionsScanned.ToString(CultureInfo.InvariantCulture)}")
-            .ConfigureAwait(false);
-        await _writer.WriteLineAsync($"# BytesRead: {summary.BytesRead.ToString(CultureInfo.InvariantCulture)}")
-            .ConfigureAwait(false);
-        await _writer.WriteLineAsync($"# StringsFound: {summary.StringsFound.ToString(CultureInfo.InvariantCulture)}")
-            .ConfigureAwait(false);
-        await _writer.WriteLineAsync($"# ReadFailures: {summary.ReadFailures.ToString(CultureInfo.InvariantCulture)}")
+        await _writer.WriteAsync(EvidenceTextFormatter.FormatFooter(summary).AsMemory(), cancellationToken)
             .ConfigureAwait(false);
         await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         await _writer.DisposeAsync().ConfigureAwait(false);
@@ -151,45 +129,8 @@ public sealed class TextFileResultSink : IStringResultSink, IAsyncDisposable
         ScanOptions options,
         CancellationToken cancellationToken)
     {
-        var regionProfile = string.Join(
-            ",",
-            new[]
-            {
-                options.IncludePrivate ? "Private" : null,
-                options.IncludeMapped ? "Mapped" : null,
-                options.IncludeImage ? "Image" : null,
-            }.Where(value => value is not null));
-        var encodings = string.Join(
-            ",",
-            new[]
-            {
-                options.DetectAscii ? "ASCII" : null,
-                options.DetectUnicode ? "Unicode(PH-wide)" : null,
-            }.Where(value => value is not null));
-
-        var architecture = Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit";
-        var header = new StringBuilder()
-            .Append("Undefined String Dumper ")
-            .Append(ProductVersion)
-            .AppendLine(" (Process Hacker 2.39 compatible)")
-            .AppendLine($"Windows NT {Environment.OSVersion.Version} ({architecture})")
-            .AppendLine(DateTime.Now.ToString("yyyy/M/d H:mm:ss", CultureInfo.InvariantCulture))
-            .AppendLine($"Target: {process.ProcessLabel}; PID: {process.ProcessId.ToString(CultureInfo.InvariantCulture)}; Minimum length: {options.MinimumLength.ToString(CultureInfo.InvariantCulture)}; Encodings: {encodings}; Regions: {regionProfile}")
-            .AppendLine($"Description: {process.DescriptionLabel}")
-            .AppendLine($"Signature: {process.SignatureExportValue}; Signer: {process.SignerExportValue}")
-            .AppendLine($"Version: {process.FileVersionExportValue}")
-            .AppendLine($"Image file name: {process.ExecutablePathExportValue}")
-            .AppendLine($"Command line: {process.CommandLineExportValue}")
-            .AppendLine($"Current directory: {process.CurrentDirectoryExportValue}")
-            .AppendLine($"Started: {process.StartedExportLabel}; Uptime at capture: {process.UptimeExportLabel}")
-            .AppendLine($"PEB address: {process.PebAddressExportValue}; Image type: {process.ImageTypeExportValue}")
-            .AppendLine($"Parent: {process.ParentProcessExportValue}")
-            .AppendLine($"Mitigation policies: {process.MitigationPoliciesExportValue}")
-            .AppendLine($"Protection: {process.ProtectionExportValue}")
-            .AppendLine()
-            .ToString();
-
-        await _writer.WriteAsync(header.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await _writer.WriteAsync(EvidenceTextFormatter.FormatHeader(process, options).AsMemory(), cancellationToken)
+            .ConfigureAwait(false);
     }
 
 }

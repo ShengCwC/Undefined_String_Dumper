@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -28,6 +30,16 @@ internal static class Program
         }
 
         if (!VerifyAbortedExportPreservesTarget())
+        {
+            return 1;
+        }
+
+        if (!VerifyEncryptedArchiveRoundTrip())
+        {
+            return 1;
+        }
+
+        if (!VerifyEncryptedSpoolContainsNoPlaintext())
         {
             return 1;
         }
@@ -169,7 +181,7 @@ internal static class Program
                 .GetResult();
 
             var contents = File.ReadAllText(outputPath);
-            var valid = contents.Contains("Undefined String Dumper 0.3.2", StringComparison.Ordinal) &&
+            var valid = contents.Contains("Undefined String Dumper 0.4.0", StringComparison.Ordinal) &&
                         contents.Contains("Process Hacker 2.39 compatible", StringComparison.Ordinal) &&
                         contents.Contains("Description: Export fixture", StringComparison.Ordinal) &&
                         contents.Contains("Signature: 已验证; Signer: Oracle America, Inc.", StringComparison.Ordinal) &&
@@ -256,6 +268,127 @@ internal static class Program
             {
                 File.Delete(outputPath);
             }
+        }
+    }
+
+    private static bool VerifyEncryptedArchiveRoundTrip()
+    {
+        var archiveId = Guid.NewGuid().ToString("D");
+        var dataKey = RandomNumberGenerator.GetBytes(32);
+        var plaintext = Encoding.UTF8.GetBytes("archive-round-trip\n令牌与内存证据\n" + new string('x', 32_000));
+        try
+        {
+            var encrypted = EncryptedArchiveSink.EncryptPart(archiveId, 0, plaintext, dataKey);
+            if (Encoding.UTF8.GetString(encrypted.Bytes).Contains("令牌与内存证据", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Encrypted archive exposed plaintext bytes.");
+                return false;
+            }
+            var restored = DumperArchiveRestoreService.DecryptPart(
+                encrypted.Bytes,
+                Guid.Parse(archiveId),
+                new DumperArchiveManifestPart
+                {
+                    Index = 0,
+                    FileName = $"{archiveId}.part-000000.usdc",
+                    PlainBytes = plaintext.LongLength,
+                    CipherBytes = encrypted.Bytes.LongLength,
+                    CiphertextSha256 = encrypted.Sha256,
+                },
+                dataKey,
+                1024 * 1024);
+            if (!plaintext.AsSpan().SequenceEqual(restored))
+            {
+                Console.Error.WriteLine("Encrypted archive round-trip changed plaintext.");
+                return false;
+            }
+
+            var corrupt = encrypted.Bytes.ToArray();
+            corrupt[^1] ^= 0x80;
+            try
+            {
+                _ = DumperArchiveRestoreService.DecryptPart(
+                    corrupt,
+                    Guid.Parse(archiveId),
+                    new DumperArchiveManifestPart
+                    {
+                        Index = 0,
+                        FileName = $"{archiveId}.part-000000.usdc",
+                        PlainBytes = plaintext.LongLength,
+                        CipherBytes = corrupt.LongLength,
+                        CiphertextSha256 = encrypted.Sha256,
+                    },
+                    dataKey,
+                    1024 * 1024);
+                Console.Error.WriteLine("Corrupt encrypted archive part was accepted.");
+                return false;
+            }
+            catch (CryptographicException)
+            {
+                // AES-GCM authentication must reject a modified ciphertext.
+            }
+
+            Console.WriteLine("PASS  Encrypted archive round-trip and tamper rejection");
+            return true;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(dataKey);
+            CryptographicOperations.ZeroMemory(plaintext);
+        }
+    }
+
+    private static bool VerifyEncryptedSpoolContainsNoPlaintext()
+    {
+        var archiveId = Guid.NewGuid().ToString("D");
+        var dataKey = RandomNumberGenerator.GetBytes(32);
+        const string secret = "UNIQUE-PLAINTEXT-MEMORY-SECRET-7F52A1";
+        EncryptedArchiveSink? sink = null;
+        try
+        {
+            sink = EncryptedArchiveSink.CreateAsync(
+                    archiveId,
+                    dataKey,
+                    new JavaProcessInfo(4242, "java", "Archive fixture", null, 0, null),
+                    new ScanOptions(),
+                    1024 * 1024,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            sink.WriteAsync(
+                    new[] { new ExtractedString(0x1234, secret.Length, secret, EncodingKind.Ascii, MemoryRegionKind.Private) },
+                    CancellationToken.None)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+            var checkpoint = sink.CompleteAsync(
+                    new ScanSummary(4242, DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow, 1, 4096, 1, 0))
+                .GetAwaiter()
+                .GetResult();
+            sink.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            sink = null;
+            foreach (var path in Directory.GetFiles(ArchiveSpoolStore.GetArchiveDirectory(archiveId)))
+            {
+                var bytes = File.ReadAllBytes(path);
+                if (Encoding.UTF8.GetString(bytes).Contains(secret, StringComparison.Ordinal))
+                {
+                    Console.Error.WriteLine($"Encrypted spool file {Path.GetFileName(path)} exposed plaintext.");
+                    return false;
+                }
+            }
+            if (!checkpoint.ScanCompleted || checkpoint.Parts.Count != 1 || checkpoint.PlaintextSha256.Length != 64)
+            {
+                Console.Error.WriteLine("Encrypted spool checkpoint is incomplete.");
+                return false;
+            }
+            Console.WriteLine("PASS  Encrypted spool contains no plaintext result data");
+            return true;
+        }
+        finally
+        {
+            if (sink is not null) sink.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            ArchiveSpoolStore.DeleteAsync(archiveId).GetAwaiter().GetResult();
+            CryptographicOperations.ZeroMemory(dataKey);
         }
     }
 }

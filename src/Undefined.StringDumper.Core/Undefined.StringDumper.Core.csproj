@@ -4,5 +4,6 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>Undefined.StringDumper.Core</AssemblyName>
     <RootNamespace>Undefined.StringDumper.Core</RootNamespace>
+    <Version>0.4.0</Version>
   </PropertyGroup>
 </Project>
